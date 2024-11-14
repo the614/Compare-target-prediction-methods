@@ -1,0 +1,80 @@
+# MolTarPred with different fingerprints(MACCS/Morgan) and similarity(Dice/Tanimoto)
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem, MACCSkeys, rdFingerprintGenerator
+import pandas as pd
+from time import time
+
+start_time = time()
+
+output_files = {
+    'MACCS+Dice': 'MolTarPred-Top10.csv',
+    'Morgan+Dice': 'Morgan+Dice.csv',
+    'MACCS+Tanimoto': 'MACCS+Tanimoto.csv',
+    'Morgan+Tanimoto': 'Morgan+Tanimoto.csv'
+}
+
+# Database molecules
+db_df = pd.read_csv('database_10nM.csv')
+# Query molecules
+query_df = pd.read_csv('query_10nM.csv')
+
+# Initialize Morgan and MACCS fingerprint generators
+morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+
+# Function to compute similarity based on fingerprint type and metric
+def compute_similarity(query_fp, db_fp, metric):
+    if metric == 'Dice':
+        return DataStructs.DiceSimilarity(query_fp, db_fp)
+    elif metric == 'Tanimoto':
+        return DataStructs.TanimotoSimilarity(query_fp, db_fp)
+
+# Function to run the similarity search with specified fingerprint and metric
+def similarity_search(fingerprint_type, similarity_metric):
+    results = []
+    
+    # Generate fingerprints for database and query molecules
+    if fingerprint_type == 'Morgan':
+        db_df['Fingerprint'] = db_df['Mol'].apply(lambda x: morgan_gen.GetFingerprint(x))
+        query_df['Fingerprint'] = query_df['Mol'].apply(lambda x: morgan_gen.GetFingerprint(x))
+    elif fingerprint_type == 'MACCS':
+        db_df['Fingerprint'] = db_df['Mol'].apply(lambda x: MACCSkeys.GenMACCSKeys(x))
+        query_df['Fingerprint'] = query_df['Mol'].apply(lambda x: MACCSkeys.GenMACCSKeys(x))
+    
+    # Calculate similarity between each query and database molecule
+    for idx, query in query_df.iterrows():
+        similarities = []
+        for db_idx, db in db_df.iterrows():
+            similarity = compute_similarity(query['Fingerprint'], db['Fingerprint'], similarity_metric)
+            similarities.append((similarity, db['Ligand-id'], db['Target-id']))
+        
+        # Sort by similarity and take the Top 10 hits
+        top_hits = sorted(similarities, key=lambda x: x[0], reverse=True)[:10]
+        
+        # Retrieve unique predicted targets
+        unique_targets = set()
+        for hit in top_hits:
+            unique_targets.update(hit[2].split(':'))
+        
+        unique_targets = sorted(unique_targets, key=int)
+        results.append([query['Ligand-id'], query['SMILES'], ':'.join(unique_targets)])
+    
+    output_file = output_files[f'{fingerprint_type}+{similarity_metric}']
+    output_df = pd.DataFrame(results, columns=["Ligand-id", "SMILES", "Target-id"])
+    output_df.to_csv(output_file, index=False)
+
+# Prepare molecules and fingerprints
+db_df['Mol'] = db_df['SMILES'].apply(Chem.MolFromSmiles)
+db_df = db_df.dropna(subset=['Mol'])  # Remove molecules that failed to generate
+query_df['Mol'] = query_df['SMILES'].apply(Chem.MolFromSmiles)
+query_df = query_df.dropna(subset=['Mol'])  # Remove molecules that failed to generate
+
+# Run searches for all combinations
+for fp_type in ['Morgan', 'MACCS']:
+    for sim_metric in ['Dice', 'Tanimoto']:
+        similarity_search(fp_type, sim_metric)
+
+elapsed_time = time() - start_time
+print(f"Elapsed time: {elapsed_time:.10f} seconds.")
