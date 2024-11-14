@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sqlalchemy
+import pandas as pd
+
+# Connect to the PostgreSQL database using SQLAlchemy
+engine = sqlalchemy.create_engine('postgresql://postgres:000000@localhost:5432/chembl_34')   # Use your own postgres password and localhost
+
+# Define the query to retrieve data
+query = """
+SELECT
+    compound_records.compound_key AS compound_id,
+    molecule_dictionary.chembl_id AS molecule_chembl_id,
+    molecule_dictionary.molregno,
+    activities.standard_value,
+    activities.standard_units,
+    activities.standard_type,
+    target_dictionary.chembl_id AS target_chembl_id,
+    target_dictionary.pref_name AS target_name
+FROM
+    activities
+JOIN
+    assays ON activities.assay_id = assays.assay_id
+JOIN
+    target_dictionary ON assays.tid = target_dictionary.tid
+JOIN
+    compound_records ON activities.record_id = compound_records.record_id
+JOIN
+    molecule_dictionary ON compound_records.molregno = molecule_dictionary.molregno
+WHERE
+    activities.standard_value <= 10000 AND
+    activities.standard_units = 'nM' AND
+    (activities.standard_type = 'IC50' OR
+     activities.standard_type = 'Ki' OR
+     activities.standard_type = 'EC50') AND
+    assays.confidence_score >= 7
+"""
+
+# Load results into a Pandas DataFrame
+df = pd.read_sql_query(query, engine)
+
+# Exclude data for multi-protein complexes and non-specific assays
+df = df[~df['target_name'].str.contains('multiple|complex', case=False, na=False)]
+
+# Remove duplicate entries
+df = df.drop_duplicates(subset=['compound_id', 'target_chembl_id'])
+df['molecule_id'] = df['molecule_chembl_id'].str.replace('CHEMBL', '', regex=False)
+
+# Read the CSV file
+database_df = pd.read_csv('database_10nM.csv')
+# Ensure 'Ligand-id' column is of string type and remove the 'CHEMBL' prefix
+database_df['Ligand-id'] = database_df['Ligand-id'].astype(str)
+database_df['molecule_id'] = database_df['Ligand-id'].str.replace('CHEMBL', '', regex=False)
+
+filtered_df = database_df[database_df['molecule_id'].isin(df['molecule_id'])]
+
+# Delete the temporary molecule_id column and export final data
+final_csv_path = 'database_10nM_high-confidence.csv'
+filtered_df.drop(columns=['molecule_id'], inplace=True)
+filtered_df.to_csv(final_csv_path, index=False)
+print(f"Filtered data exported to '{final_csv_path}'.")
