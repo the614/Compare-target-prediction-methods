@@ -1,0 +1,27 @@
+# Turn to Query Folder
+# Continue after Query/02 Random_100_query.py
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import pandas as pd
+
+database_file_path = 'Chembl_34_database.csv'
+database_df = pd.read_csv(database_file_path)
+
+fda_data_file_path = 'query_10nM.csv'
+fda_df = pd.read_csv(fda_data_file_path)
+
+database_df['Ligand-id'] = database_df['Ligand-id'].astype(str)
+fda_df['Ligand-id'] = fda_df['Ligand-id'].astype(str)
+
+# Create a set of Ligand-ids from the FDA data file
+ligand_ids_fda = set(fda_df['Ligand-id'])
+
+# Filter the database to exclude rows with Ligand-ids present in the FDA data file
+filtered_database_df = database_df[~database_df['Ligand-id'].isin(ligand_ids_fda)]
+
+output_file_path = 'database_10nM.csv'
+filtered_database_df.to_csv(output_file_path, index=False)
+
+print("Final data has been exported to", output_file_path)
