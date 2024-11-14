@@ -68,7 +68,7 @@ def refresh_until_ready(driver, timeout=1200, sleep_time=10):
     raise TimeoutError("Timed out waiting for 'ChEMBL' to appear.")
 
 # Extract and sort all ChEMBL values from the page text
-def extract_top_chembl_values(page_text, top_n=10):
+def extract_top_chembl_values(page_text, top_n=10):    # If comparing based on Top5, choosing the first 5 among Top 10.
     chembl_pattern = re.compile(r'CHEMBL\d+')
     matches = chembl_pattern.findall(page_text)
     unique_matches = list(set(matches))  # Remove duplicates
