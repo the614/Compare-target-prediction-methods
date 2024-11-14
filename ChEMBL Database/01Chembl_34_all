@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sqlalchemy
+import pandas as pd
+
+# Connect to PostgreSQL database using SQLAlchemy
+engine = sqlalchemy.create_engine('postgresql://postgres:000000@localhost:5432/chembl_34')    # Use your own postgres password and localhost
+
+# Query to count unique chembl_id in molecule_dictionary table
+query_molecule = "SELECT COUNT(DISTINCT chembl_id) AS num_compounds FROM molecule_dictionary"
+df_molecule = pd.read_sql_query(query_molecule, engine)
+
+# Print the number of unique compounds
+num_compounds = df_molecule['num_compounds'].iloc[0]
+print(f"Number of unique ChEMBL IDs for compounds: {num_compounds}")
+
+# Query to count unique chembl_id in target_dictionary table
+query_target = "SELECT COUNT(DISTINCT chembl_id) AS num_targets FROM target_dictionary"
+df_target = pd.read_sql_query(query_target, engine)
+
+# Print the number of unique targets
+num_targets = df_target['num_targets'].iloc[0]
+print(f"Number of unique ChEMBL IDs for targets: {num_targets}")
+
+# Define a query to retrieve data
+query = """
+SELECT
+    compound_records.compound_key AS compound_id,
+    molecule_dictionary.chembl_id AS molecule_chembl_id,
+    molecule_dictionary.molregno,
+    activities.standard_value,
+    activities.standard_units,
+    activities.standard_type,
+    target_dictionary.chembl_id AS target_chembl_id,
+    target_dictionary.pref_name AS target_name
+FROM
+    activities
+JOIN
+    assays ON activities.assay_id = assays.assay_id
+JOIN
+    target_dictionary ON assays.tid = target_dictionary.tid
+JOIN
+    compound_records ON activities.record_id = compound_records.record_id
+JOIN
+    molecule_dictionary ON compound_records.molregno = molecule_dictionary.molregno
+"""
+
+# Execute the query and load results into a Pandas DataFrame
+df = pd.read_sql_query(query, engine)
+
+# Export the data to a CSV file
+df.to_csv('Chembl_34_all.csv', index=False)
+
+# Print confirmation of file export
+print("Complete data exported to CSV file.")
