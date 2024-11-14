@@ -10,7 +10,7 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 # Define the files to process, including the new files
 files = {
     'Pre_filter': 'MolTarPred-Top10.csv',      
-    'Post_filter': 'MolTarPred_post_filter-Top10.csv'  
+    'Post_filter': 'MolTarPred_high-confidence.csv'  
 }
 
 # Initialize lists to store average results for each method
