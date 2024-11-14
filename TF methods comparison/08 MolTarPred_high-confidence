@@ -1,0 +1,166 @@
+# MolTarPred with high-confidence filtered database
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import csv
+from rdkit import Chem
+from rdkit import DataStructs
+from time import time
+from rdkit.Chem import MACCSkeys
+
+start_time = time()
+ttqueryname=[];ttle=[];tupt=[]
+
+# Database potential hit molecules: reading the csv file
+dbmols=open('database_10nM_high-confidence.csv')
+dbmols_l=csv.reader(dbmols)
+
+# Query molecules: reading the csv file 
+qr=open('query_10nM.csv')
+qr_l=csv.reader(qr)
+
+# Creating the list with the data
+qr1=[];db1=[]
+# Potential hit data
+for row in dbmols_l:
+    rl=row[2]
+    rl=rl.split(":")
+    db1.append((row[0],row[1],rl))
+# Query molecule data
+for row in qr_l:
+    qr1.append((row[0],row[1]))
+
+# Delete the first line (title line)
+qr1.remove(qr1[0])
+db1.remove(db1[0])
+
+# Checking the SMILES and creating the fingerprints
+fpml=[]; dbnowork=[]; db1del=[]
+# Potential hits 
+x=0
+while x < len(db1):
+   ma=db1[x]
+   m=ma[1]
+   ml = Chem.MolFromSmiles(m)
+   xm= ml is None
+   if xm == True:
+       mb=db1[x]
+       m1=mb[0]
+       t=(m1,m)
+       dbnowork.append(t)
+       db1del.append(x)
+   else:
+       fpm = MACCSkeys.GenMACCSKeys(ml)
+       fpml.append(fpm)
+   x=x+1
+
+dl=range(len(db1del))
+tr=[]
+xt=0
+while xt < len(dl):
+   y=db1del[xt]-dl[xt]
+   tr.append(y)
+   xt=xt+1
+for k in tr:
+   db1.remove(db1[k])
+
+# Query molecules fingerprints
+afpml=[]; qrnowork=[]; qr1del=[]
+x=0
+while x < len(qr1):
+   ma=qr1[x]; m=ma[1]
+   ml = Chem.MolFromSmiles(m)
+   xm= ml is None
+   if xm == True:
+       m1a=qr1[x]
+       m1=m1a[0]  
+       t=(m1,m)
+       qrnowork.append(t)
+       qr1del.append(x)
+   else:
+       fpm = MACCSkeys.GenMACCSKeys(ml)
+       afpml.append(fpm)
+   x=x+1
+
+dl=range(len(qr1del))
+tr=[]
+xt=0
+while xt < len(dl):
+   y=qr1del[xt]-dl[xt]
+   tr.append(y)
+   xt=xt+1
+for k in tr:
+   qr1.remove(db1[k])
+
+data="qrnowork.csv"
+csv_out = open(data, 'w')
+mywriter = csv.writer(csv_out)
+for row in zip(qrnowork):
+   mywriter.writerow(row)
+csv_out.close()
+
+
+# Similarity of each molecule with the query molecules.
+similarity=[]
+adrug=0
+while adrug < len(afpml):
+    tempdl=[]
+    ndrug=0
+    while ndrug < len(fpml):
+         t=DataStructs.DiceSimilarity(afpml[adrug],fpml[ndrug])
+         nad=db1[ndrug]
+         cnad=nad[0]
+         ft=(t,cnad)
+         tempdl.append(ft)            
+         ndrug=ndrug+1
+    similarity.append(tempdl)
+    adrug=adrug+1
+
+
+# For each query molecule we retrieved the top 5 hits
+z=0
+while z < len(similarity):
+    t=similarity[z]
+    atsile=qr1[z]
+    tsile=atsile[1]
+    aqrsmilename=qr1[z]
+    tqueryname=aqrsmilename[0]
+    # ordered the list by similarity
+    t.sort(key=lambda x: x[0], reverse=True)
+    t=t[:10]   # Top 10 hits
+    # Retrieving targets
+    uniq_predicted_targets=[]
+    for hit in t:
+        ytnad=hit[1]
+        temp=[]
+        for i in [i for i,x in enumerate(db1) if x[0] == ytnad]:
+            temp.append(db1[i])
+            lint=db1[i];trg=lint[2]
+            for trgts in trg:
+                if trgts not in uniq_predicted_targets:
+                    uniq_predicted_targets.append(trgts)
+ 
+    # Order the targets in ascending order
+    uniq_predicted_targets=sorted(uniq_predicted_targets, key=int)
+    upt =list()
+    upt.append(':'.join(uniq_predicted_targets))
+    data="molec"+tqueryname+"_similar_molec.csv"
+    tle=[tsile]; tqueryname=[tqueryname]
+    ttqueryname.append(tqueryname[0]);ttle.append(tle[0]);tupt.append(upt[0]) 
+    z=z+1
+
+ttqueryname.insert(0,"Ligand-ID")
+ttle.insert(0,"SMILES")
+tupt.insert(0,"Targets-ID")
+
+data="MolTarPred_high-confidence.csv"
+csv_out = open(data, 'w')
+mywriter = csv.writer(csv_out)
+tle=[tsile]
+tqueryname=[tqueryname]
+for row in zip(ttqueryname,ttle,tupt):
+    mywriter.writerow(row)
+csv_out.close()
+
+elapsed_time= time() - start_time
+print ("Elapsed ptime: %.10f seconds." %elapsed_time )
