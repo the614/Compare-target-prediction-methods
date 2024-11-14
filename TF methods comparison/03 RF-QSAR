@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import time
+import pandas as pd
+import re
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Setup the Chrome driver
+def setup_driver():
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service)
+    return driver
+
+# Read the CSV file and process each SMILES entry
+def read_smiles(csv_file):
+    df = pd.read_csv(csv_file)
+    if 'SMILES' not in df.columns:
+        raise ValueError("The file does not contain a 'SMILES' column.")
+    return df
+
+# Open the RF QSAR home page
+def open_rf_qsar_home(driver, url):
+    driver.get(url)
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'smiles1')))
+
+# Enter SMILES data and submit
+def enter_smiles_and_submit(driver, smiles):
+    smiles_input = driver.find_element(By.ID, 'smiles1')
+    smiles_input.send_keys(smiles)
+    add_button = driver.find_element(By.ID, 'mol_list_append')
+    add_button.click()
+    WebDriverWait(driver, 2).until(EC.element_to_be_clickable((By.ID, 'submit'))).click()
+
+# Wait for the job to complete and retrieve the job ID
+def get_job_id(driver):
+    try:
+        WebDriverWait(driver, 60).until(
+            EC.url_contains('result.php')
+        )
+        redirect_url = driver.current_url
+        return redirect_url.split('jobid=')[1]
+    except Exception as e:
+        print(f"Error while waiting for job completion: {e}")
+        raise
+
+# Refresh the page until 'ChEMBL' appears in the page text
+def refresh_until_ready(driver, timeout=1200, sleep_time=10):
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            driver.refresh()
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.TAG_NAME, 'body'))
+            )
+            page_text = driver.find_element(By.TAG_NAME, 'body').text
+            if 'ChEMBL' in page_text:
+                return
+            time.sleep(sleep_time)  # Increase sleep time between refresh attempts
+        except Exception as e:
+            print(f"Error during refresh: {e}")
+            time.sleep(sleep_time)
+    raise TimeoutError("Timed out waiting for 'ChEMBL' to appear.")
+
+# Extract and sort all ChEMBL values from the page text
+def extract_top_chembl_values(page_text, top_n=10):
+    chembl_pattern = re.compile(r'CHEMBL\d+')
+    matches = chembl_pattern.findall(page_text)
+    unique_matches = list(set(matches))  # Remove duplicates
+    sorted_matches = sorted(unique_matches, key=lambda x: int(x[6:]), reverse=True)  # Sort by numeric part
+    return sorted_matches[:top_n]  # Get top N
+
+# Process each SMILES and append results to the output file
+def process_smiles(input_file, output_file):
+    df = read_smiles(input_file)
+    
+    with open(output_file, 'w') as file:
+        file.write('Ligand-id,SMILES,Targets-id\n')  # Write header row
+        
+        for _, row in df.iterrows():
+            smiles = row['SMILES']
+            ligand_id = row['Ligand-id']
+            
+            # Initialize WebDriver
+            driver = setup_driver()
+            try:
+                url = 'http://rfqsar.kaist.ac.kr/home.php'
+                open_rf_qsar_home(driver, url)
+                enter_smiles_and_submit(driver, smiles)
+                job_id = get_job_id(driver)
+                results_url = f'http://rfqsar.kaist.ac.kr/result.php?jobid={job_id}'
+                driver.get(results_url)
+                refresh_until_ready(driver)
+                page_text = driver.find_element(By.TAG_NAME, 'body').text
+                chembl_values = extract_top_chembl_values(page_text)
+                chembl_values_str = ':'.join(chembl_values)
+                
+                # Write result for the current SMILES
+                file.write(f'{ligand_id},{smiles},{chembl_values_str}\n')
+            finally:
+                driver.quit()
+
+# Process the Targets-id column to remove 'CHEMBL' and format the IDs
+def process_targets_id(targets_id):
+    if isinstance(targets_id, str):
+        targets_id = targets_id.replace('CHEMBL', '').strip()
+        chembl_ids = targets_id.split(',')
+        formatted_ids = ':'.join([id.strip() for id in chembl_ids])
+        return formatted_ids
+    else:
+        return targets_id
+
+# Main function
+def main():
+    input_file = "query_10nM.csv"
+    temp_output_file = "RF-QSAR-Top10_before_removing_CHEMBL.csv"
+    final_output_file = "RF-QSAR-Top10.csv"
+
+    start_time = time.time()
+    
+    # Process SMILES and generate initial output
+    process_smiles(input_file, temp_output_file)
+    
+    # Load the initial results and process Targets-id column
+    df = pd.read_csv(temp_output_file)
+    df['Target-id'] = df['Target-id'].apply(process_targets_id)
+    df.to_csv(final_output_file, index=False)
+    
+    end_time = time.time()
+    total_time = end_time - start_time
+    print(f"Processed results saved to '{final_output_file}'")
+    print(f"Total elapsed time: {total_time:.2f} seconds")
+
+if __name__ == "__main__":
+    main()
