@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sqlalchemy
+import pandas as pd
+
+# Connect to PostgreSQL database using SQLAlchemy
+engine = sqlalchemy.create_engine('postgresql://postgres:000000@localhost:5432/chembl_34')    # Use your own postgres password and localhost
+
+# Define query to retrieve data for approved drugs
+query = """
+SELECT
+    md.chembl_id AS molecule_chembl_id,
+    md.pref_name AS molecule_name,
+    md.first_approval AS first_approval_year
+FROM
+    molecule_dictionary md
+WHERE
+    md.first_approval IS NOT NULL
+"""
+
+# Execute the query and load results into a Pandas DataFrame
+df = pd.read_sql_query(query, engine)
+
+# Export FDA-approved drugs data to CSV
+fda_data_file_path = 'FDA_data_initial.csv'
+df.to_csv(fda_data_file_path, index=False)
+print("FDA-approved drugs data exported to CSV file.")
+
+# Rename the first column from molecule_chembl_id to Ligand-id
+df.columns = ['Ligand-id'] + list(df.columns[1:])
+
+# Remove the substring 'CHEMBL' from each value in the Ligand-id column
+df['Ligand-id'] = df['Ligand-id'].str.replace('CHEMBL', '', regex=False)
+
+# Read the Chembl_34_database.csv file
+database_df = pd.read_csv('Chembl_34_database.csv')
+database_df['Ligand-id'] = database_df['Ligand-id'].astype(str)
+
+ligand_ids = df[['Ligand-id']]
+merged_df = pd.merge(ligand_ids, database_df, on='Ligand-id', how='left')
+
+# Count the number of unmatched rows
+no_match_count = merged_df['SMILES'].isnull().sum()
+
+# Drop rows with null values in the SMILES column
+merged_df = merged_df.dropna(subset=['SMILES'])
+
+output_file_path = 'Query_FDA.csv'
+merged_df.to_csv(output_file_path, index=False)
+
+print("Matched rows have been exported to", output_file_path)
+print(f"Number of rows with no matches: {no_match_count}")
