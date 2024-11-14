@@ -112,8 +112,6 @@ async def main():
     print(f"Total elapsed time: {total_elapsed_time:.10f} seconds")
 
 def process_targets(input_csv):
-    # Define output file path
-    output_csv = "PPB2_Pred10Targets.csv"
 
     # Load the input CSV file into a DataFrame
     df = pd.read_csv(input_csv)
