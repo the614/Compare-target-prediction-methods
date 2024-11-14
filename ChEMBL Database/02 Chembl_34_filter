@@ -50,4 +50,4 @@ df = df.drop_duplicates(subset=['compound_id', 'target_chembl_id'])
 df.to_csv('Chembl_34_filter.csv', index=False)
 
 # Print confirmation of file export
-print("Cleaned data exported to CSV file.")
+print("Filtered data exported to CSV file.")
