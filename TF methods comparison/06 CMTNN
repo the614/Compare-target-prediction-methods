@@ -1,0 +1,111 @@
+# Download required file from ChEMBL Multitask Nerual Network model via https://github.com/chembl/chembl_multitask_model
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import csv
+import numpy as np
+import onnxruntime
+from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
+import pandas as pd
+import time
+
+# Constants
+FP_SIZE = 1024
+RADIUS = 2
+
+# Start timing
+start_time = time.time()
+
+# Function to calculate Morgan fingerprints
+def calc_morgan_fp(smiles):
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    fp = rdMolDescriptors.GetMorganFingerprintAsBitVect(mol, RADIUS, nBits=FP_SIZE)
+    a = np.zeros((FP_SIZE,), dtype=np.float32)
+    Chem.DataStructs.ConvertToNumpyArray(fp, a)
+    return a
+
+# Function to format predictions
+def format_preds(preds, targets):
+    preds = np.array(preds).ravel()
+    np_preds = [(tar, pre) for tar, pre in zip(targets, preds)]
+    dt = [('chembl_id', '|U20'), ('pred', '<f4')]
+    np_preds = np.array(np_preds, dtype=dt)
+    np_preds[::-1].sort(order='pred')  # Sort in descending order
+    return np_preds
+
+# Load the ONNX model
+ort_session = onnxruntime.InferenceSession("trained_models/chembl_34_model/chembl_34_multitask.onnx", providers=['CPUExecutionProvider'])
+
+input_file = "query_10nM.csv"
+temp_output_file = "CMTNN-Top10_before_removing_CHEMBL.csv"
+final_output_file = "CMTNN-Top10.csv"
+
+with open(input_file, 'r') as infile, open(temp_output_file, 'w', newline='') as outfile:
+    reader = csv.reader(infile)
+    writer = csv.writer(outfile)
+    
+    header = next(reader)  # Read header
+    targets_idx = header.index('Target-id')  
+    writer.writerow(header)  # Write header to output file
+    
+    for row in reader:
+        if len(row) < 2:
+            continue
+        
+        smiles = row[1]  # SMILES is in the second column
+        
+        # Calculate Morgan fingerprints
+        descs = calc_morgan_fp(smiles)
+        if descs is None:
+            continue
+        
+        descs = descs.astype(np.float32)
+        
+        # Run inference
+        ort_inputs = {ort_session.get_inputs()[0].name: descs }
+        preds = ort_session.run(None, ort_inputs)
+        
+        # Format predictions
+        output_names = [o.name for o in ort_session.get_outputs()]
+        formatted_preds = format_preds(preds, output_names)
+        
+        # Extract and format the top 10 entries
+        top_10_ids = [chembl_id for chembl_id, score in formatted_preds[:10]]    # If comparing based on Top5, choosing the first 5 among Top 10.
+        top_10_output = ':'.join(top_10_ids)
+        
+        # Write results to the existing 'Targets-id' column
+        row[targets_idx] = top_10_output
+        writer.writerow(row)
+
+df = pd.read_csv(temp_output_file)
+
+# Function to process the Targets-ID column
+def process_targets_id(targets_id):
+    # Check if the targets_id is a string
+    if isinstance(targets_id, str):
+        # Remove the CHEMBL string from the input
+        targets_id = targets_id.replace('CHEMBL', '').strip()
+        # Split the remaining string by colons
+        chembl_ids = targets_id.split(':')
+        # Join the IDs with colons
+        formatted_ids = ':'.join(chembl_ids)
+        return formatted_ids
+    else:
+        # Return the original value if it's not a string
+        return targets_id
+
+# Apply the processing function to the Targets-ID column
+df['Target-id'] = df['Target-id'].apply(process_targets_id)
+
+df.to_csv(final_output_file, index=False)
+
+# End timing
+end_time = time.time()
+elapsed_time = end_time - start_time
+
+print(f"Processed results saved to '{final_output_file}'")
+print(f"Total execution time: {elapsed_time:.2f} seconds")
