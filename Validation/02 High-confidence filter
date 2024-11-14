@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import csv
+import math
+import numpy as np
+from time import time
+from sklearn.metrics import roc_auc_score, average_precision_score
+
+# Define the files to process, including the new files
+files = {
+    'Pre_filter': 'MolTarPred-Top10.csv',      
+    'Post_filter': 'MolTarPred_post_filter-Top10.csv'  
+}
+
+# Initialize lists to store average results for each method
+all_av_yPT = []
+all_av_yacc = []
+all_av_yppv = []
+all_av_yrecall = []
+all_av_yMCC = []
+all_av_yTN = []
+all_av_yFP = []
+all_av_yFN = []
+all_av_yTP = []
+all_av_auc_pr = []
+all_av_auc_roc = []
+all_methods = []
+
+start_time = time()
+
+# Process each file
+for method, filename in files.items():
+    # Database potential hit molecules: reading the csv file
+    with open(filename) as output:
+        output_l = csv.reader(output)
+
+        # Query molecules: reading the csv file 
+        qr = open('query_10nM.csv')
+        qr_l = csv.reader(qr)
+
+        # Creating the list with the data
+        qr1 = []
+        db1 = []
+
+        # Results
+        for row in output_l:
+            rl = row[2]
+            rl = rl.split(":")
+            rl = rl[:10]   # Top10
+            db1.append((row[0], row[1], rl))
+
+        # Query molecule with true values
+        for row in qr_l:
+            rl = row[2]
+            rl = rl.split(":")
+            qr1.append((row[0], row[1], rl))
+
+        # Delete the first line (title line)
+        qr1.remove(qr1[0])
+        db1.remove(db1[0])
+
+        # New part
+        uniq_targets = []
+        val_rel = []
+        
+        # For each query molecule, retrieve the top hits
+        z = 0
+        while z < len(qr1):
+            lig = qr1[z]
+            ytnad = lig[0]
+            qrtarg = lig[2]
+            temp = []
+            for i in [i for i, x in enumerate(db1) if x[0] == ytnad]:
+                temp.append(db1[i])
+                fdb1 = db1[i]
+                outarg = fdb1[2]
+                val_rel.append((ytnad, qrtarg, outarg))
+                lint = db1[i]
+                trg = lint[2]
+                for trgts in outarg:
+                    if trgts not in uniq_targets:
+                        uniq_targets.append(trgts)
+                for trgts in qrtarg:
+                    if trgts not in uniq_targets:
+                        uniq_targets.append(trgts)
+            z += 1
+
+        total = len(uniq_targets)
+        yTP = []
+        yMCC = []
+        yFN = []
+        yFP = []
+        yTN = []
+        yFNR = []
+        yPT = []
+        yacc = []
+        yppv = []
+        ynpv = []
+        ychembl_lig = []
+        yrecall = []
+        auc_pr_list = []
+        auc_roc_list = []
+
+        z = 0
+        while z < len(val_rel):
+            y = val_rel[z]
+            name = y[0]
+            real = y[1]
+            pred = y[2]
+
+            # Confusion Matrix
+            TPa = []
+            TPtarg = []
+            FPa = []
+            for key in pred:
+                if key in real:
+                    TPa.append(1)
+                    TPtarg.append(key)
+                else:
+                    FPa.append(1)
+
+            # TP: true positive
+            aTP = len(TPa)
+            yTP.append(aTP)
+            aTP = float(aTP)
+            
+            # FN: false negative
+            aFN = len(real) - aTP
+            yFN.append(aFN)
+            aFN = float(aFN)
+
+            # FP: False positives
+            aFP = len(FPa)
+            yFP.append(aFP)
+            aFP = float(aFP)
+
+            # TN: true negative
+            aTN = total - aFN - aTP - aFP
+            yTN.append(aTN)
+            aTN = float(aTN)
+
+            atp = float(aTP)
+            afn = float(aFN)
+            atn = float(aTN)
+            afp = float(aFP)
+
+            # NPT: predicted Targets
+            aPT = len(pred)
+            yPT.append(aPT)
+            
+            # ACC
+            acc = (atp + atn) / (atp + afp + atn + afn)
+            yacc.append(acc)
+
+            # Precision
+            if (atp + afp) == 0:
+                appv = 0.0
+            else:
+                appv = atp / (atp + afp)
+            yppv.append(appv)
+            
+            # Recall
+            recall = atp / (atp + afn)
+            yrecall.append(recall)
+
+            # Query Molecule
+            ychembl_lig.append(name)
+
+            # Matthews Correlation Coefficient
+            denominator = math.sqrt((atp + afp) * (atp + afn) * (atn + afp) * (atn + afn))
+            if denominator == 0:
+                aMCC = 0.0
+            else:
+                aMCC = (atp * atn - afp * afn) / denominator
+            yMCC.append(aMCC)    
+            z += 1
+
+        av_yPT = np.mean(yPT)
+        av_yacc = np.mean(yacc)
+        av_yppv = np.mean(yppv)
+        av_yrecall = np.mean(yrecall)
+        av_yMCC = np.mean(yMCC)
+        av_yTN = np.mean(yTN)
+        av_yFP = np.mean(yFP)
+        av_yFN = np.mean(yFN)
+        av_yTP = np.mean(yTP)
+
+        # Store averages for the final file
+        all_av_yPT.append(av_yPT)
+        all_av_yacc.append(av_yacc)
+        all_av_yppv.append(av_yppv)
+        all_av_yrecall.append(av_yrecall)
+        all_av_yMCC.append(av_yMCC)
+        all_av_yTN.append(av_yTN)
+        all_av_yFP.append(av_yFP)
+        all_av_yFN.append(av_yFN)
+        all_av_yTP.append(av_yTP)
+        all_methods.append(method)
+
+        # Prepare data for per-query output
+        ychembl_lig.insert(0, "Ligand-ID")
+        yPT.insert(0, "NPT")
+        yacc.insert(0, "Accuracy")
+        yppv.insert(0, "Precision")
+        yrecall.insert(0, "Recall")
+        yMCC.insert(0, "MCC")
+        yTN.insert(0, "TN")
+        yFP.insert(0, "FP")
+        yFN.insert(0, "FN")
+        yTP.insert(0, "TP")
+
+        # Write the per-query results to a CSV file
+        data = f"{method}_per.csv"
+        with open(data, 'w', newline='') as csv_out:
+            mywriter = csv.writer(csv_out)
+            for row in zip(ychembl_lig, yPT, yacc, yppv, yrecall, yMCC, yTN, yFP, yFN, yTP):
+                mywriter.writerow(row)
+
+# Prepare data for the final file
+all_methods.insert(0, "Method")
+all_av_yPT.insert(0, "avNPT")
+all_av_yacc.insert(0, "avAccuracy")
+all_av_yppv.insert(0, "avPrecision")
+all_av_yrecall.insert(0, "avRecall")
+all_av_yMCC.insert(0, "avMCC")
+all_av_yTN.insert(0, "avTN")
+all_av_yFP.insert(0, "avFP")
+all_av_yFN.insert(0, "avFN")
+all_av_yTP.insert(0, "avTP")
+
+with open("Validation_filter_ave.csv", 'w', newline='') as csv_out: 
+    mywriter = csv.writer(csv_out)
+    for row in zip(all_methods, all_av_yPT, all_av_yacc, all_av_yppv, all_av_yrecall, all_av_yMCC, all_av_yTN, all_av_yFP, all_av_yFN, all_av_yTP):
+        mywriter.writerow(row)
+
+elapsed_time = time() - start_time
+print(f"Elapsed time: {elapsed_time:.10f} seconds.")
