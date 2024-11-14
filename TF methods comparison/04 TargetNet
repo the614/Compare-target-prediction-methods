@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import aiohttp
+import pandas as pd
+import asyncio
+import nest_asyncio
+import requests
+import xml.etree.ElementTree as ET
+import re
+import time
+from io import StringIO
+
+nest_asyncio.apply()
+
+# Fetch ChEMBL ID from a given UniProt ID
+def fetch_chembl_id_from_uniprot(uniprot_id):
+    url = f"https://www.uniprot.org/uniprot/{uniprot_id}.xml"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        namespace = {'ns': 'http://uniprot.org/uniprot'}
+        chembl_ids = [dbReference.attrib.get('id') for dbReference in root.findall('.//ns:dbReference', namespaces=namespace) if dbReference.attrib.get('type') == 'ChEMBL']
+        return ':'.join(chembl_ids)
+    except Exception as e:
+        print(f"Error fetching ChEMBL ID for {uniprot_id}: {e}")
+        return ''
+
+# Function to convert UniProt IDs in the dataframe to ChEMBL IDs
+def convert_uniprot_to_chembl(df):
+    def process_targets(targets):
+        uniprot_ids = targets.split(':')
+        chembl_ids = [fetch_chembl_id_from_uniprot(uid) for uid in uniprot_ids]
+        # Remove 'CHEMBL' prefix from each ID
+        chembl_ids = [chembl_id.replace('CHEMBL', '') for chembl_id in ':'.join(chembl_ids).split(':')]
+        return ':'.join(chembl_ids)
+    
+    # Apply the conversion to the 'Predicted_Targets' column
+    df['Target-id'] = df['Predicted_Targets'].apply(process_targets)
+    return df
+
+# Function to extract ChEMBL IDs from the results
+def extract_chembl_ids(targets_id_str):
+    chembl_ids = re.findall(r'CHEMBL(\d+)', targets_id_str)
+    return ':'.join(chembl_ids)
+
+# Asynchronous function to query TargetNet
+async def targetNet(smile: str) -> str:
+    url = "http://targetnet.scbdd.com/calcnet/calc_ensemble_text/"
+    data = {
+        "smile": smile,
+        "finger_type": "BaseInfo_daylight"  # Adjusted based on your intended usage
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    try:
+                        # Parse the HTML table
+                        tables = pd.read_html(StringIO(text))
+                        if not tables:
+                            return "{}"
+                        df = tables[0]
+
+                        # Extract and sort by 'Prob'
+                        if 'Prob' in df.columns:
+                            df = df.sort_values(by='Prob', ascending=False).head(5)
+
+                        # Convert to JSON and return
+                        return df.T.to_json()
+                    except (ValueError, IndexError) as e:
+                        print(f"Error parsing HTML or processing dataframe: {e}")
+                        return "{}"
+                else:
+                    print(f"HTTP error: {resp.status}")
+                    return "{}"
+    except aiohttp.ClientError as e:
+        print(f"Client error: {e}")
+        return "{}"
+
+# Asynchronous function to process a list of SMILES
+async def process_smiles(smiles_list):
+    tasks = [targetNet(smile) for smile in smiles_list]
+    results = await asyncio.gather(*tasks)
+    return results
+
+def main():
+    input_file = 'query_10nM.csv'
+    temp_output_file = 'TargetNet-Top10_before_removing_CHEMBL.csv'
+    final_output_file = 'TargetNet-Top10.csv'
+
+    start_time = time.time()
+
+    # Read input SMILES from CSV
+    df_input = pd.read_csv(input_file)
+    
+    if 'SMILES' not in df_input.columns:
+        raise ValueError("Input CSV must contain 'SMILES' column")
+    
+    smiles_list = df_input['SMILES'].tolist()
+
+    # Process each SMILES asynchronously
+    results = asyncio.run(process_smiles(smiles_list))
+    df_input['Target-id'] = results
+
+    # Save the initial results to a temporary file
+    df_input.to_csv(temp_output_file, index=False, columns=['Ligand-id', 'SMILES', 'Target-id'])
+
+    # Process the Target-id column to extract CHEMBL IDs
+    df_temp = pd.read_csv(temp_output_file)
+    df_temp['Target-id'] = df_temp['Target-id'].apply(extract_chembl_ids)
+    df_temp.to_csv(final_output_file, index=False)
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    print(f"Processed results saved to '{final_output_file}'")
+    print(f"Total elapsed time: {total_time:.2f} seconds")
+
+if __name__ == "__main__":
+    main()
