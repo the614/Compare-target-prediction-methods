@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import requests
+import pandas as pd
+
+url = 'https://www.ebi.ac.uk/chembl/target-predictions'
+query_df = pd.read_csv('query_10nM.csv')
+target_id_list = []
+
+for smiles in query_df['SMILES']:
+    data = {"smiles": smiles}
+    response = requests.post(url, json=data)
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        results = response.json()
+        df = pd.DataFrame(results)
+
+        # Filter rows where '70%', '80%', and '90%' columns are all 'active'
+        active_df = df[(df['70%'] == 'active') & (df['80%'] == 'active') & (df['90%'] == 'active')]
+
+        # Sort by the 'threshold' column in descending order and take the top 5 rows
+        top_5_df = active_df.sort_values(by='threshold', ascending=False).head(5)    # change 5 into 10, if choosing the 10 first hits
+
+        # Extract the 'target_chemblid' column, remove the 'CHEMBL' prefix, and join with colons
+        target_ids = ':'.join(top_5_df['target_chemblid'].str.replace('CHEMBL', ''))
+
+        target_id_list.append(target_ids)
+    else:
+        print(f"Request failed with status code: {response.status_code}")
+        target_id_list.append('')  # If the request fails, add an empty string
+
+# Write the results to a new 'Target-id' column in query_df
+query_df['Target-id'] = target_id_list
+
+# Write the modified DataFrame to a new CSV file
+query_df.to_csv('ChEMBL-Top5.csv', index=False)
+
+print("File has been successfully written.")
