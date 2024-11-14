@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import asyncio
+import requests
+from requests.exceptions import RequestException
+from bs4 import BeautifulSoup
+import nest_asyncio
+import pandas as pd
+from time import time
+
+nest_asyncio.apply()
+
+__all__ = ["ppb2_nnnb_ecfp4"]
+
+class PPBTwo:
+    def __init__(self, smiles: str, method: str):
+        assert method in ["NN(ECfp4) + NB(ECfp4)"]
+
+        self.smiles = smiles
+        self.method = method
+
+        self.hashTable = {
+            "NN(ECfp4) + NB(ECfp4)": {
+                "smi": self.smiles, "fp": "ECfp4",
+                "method": "SimPlusNaiveBayes", "scoringmethod": "TANIMOTO"
+            }
+        }
+
+    async def predict(self):
+        session = requests.Session()
+        requestUrl = "https://ppb2.gdb.tools/predict"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:90.0) Gecko/20100101 Firefox/90.0"
+        }
+
+        params = self.hashTable[self.method]
+
+        try:
+            response = session.get(requestUrl, params=params, timeout=300, headers=headers)
+            response.raise_for_status()
+        except RequestException:
+            return {}
+
+        try:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            table = soup.find('table', {'id': 'resultTable'})
+            rows = table.find_all('tr')[1:]  # Skip the header row
+            # Get the ChEMBL IDs and limit to the top 10
+            chembl_ids = [row.find_all('td')[1].text.strip() for row in rows[:10]]  # If comparing based on Top5, choosing the first 5 among Top 10.
+        except Exception as e:
+            print(f"Error parsing HTML: {str(e)}")
+            return {}
+
+        return {"ChEMBL_IDs": chembl_ids}
+
+async def ppb2_nnnb_ecfp4(smiles: str):
+    spider = PPBTwo(smiles, "NN(ECfp4) + NB(ECfp4)")
+    return await spider.predict()
+
+# Read the input CSV file
+input_file = "query_10nM.csv"
+output_file = "PPB2-Top10.csv"
+
+# Load the CSV data
+df = pd.read_csv(input_file)
+
+# Prepare for asynchronous execution
+async def process_smiles(row):
+    smiles = row['SMILES']
+    try:
+        # Await the result of the async function
+        result = await ppb2_nnnb_ecfp4(smiles)
+
+        # Update the Target-ID column with ChEMBL IDs
+        if 'ChEMBL_IDs' in result:
+            return ','.join(result['ChEMBL_IDs'])
+        else:
+            return ''
+    except Exception as e:
+        print(f"Error processing SMILES '{smiles}': {str(e)}")
+        return ''
+
+async def batch_process(df):
+    tasks = []
+    # Create tasks for each row in the DataFrame
+    for idx, row in df.iterrows():
+        task = asyncio.create_task(process_smiles(row))
+        tasks.append(task)
+    
+    # Wait for all tasks to complete
+    results = await asyncio.gather(*tasks)
+    
+    # Update the DataFrame with the results
+    for idx, result in enumerate(results):
+        df.at[idx, 'Targets-ID'] = result
+
+# Main function to run the batch processing
+async def main():
+    start_time = time()  # Record start time
+
+    await batch_process(df)
+
+    # Save the updated DataFrame to a new CSV file
+    df.to_csv(output_file, index=False)
+
+    # Process the Targets-ID column
+    process_targets(output_file)
+    
+    end_time = time()  # Record end time
+    total_elapsed_time = end_time - start_time
+    print(f"Total elapsed time: {total_elapsed_time:.10f} seconds")
+
+def process_targets(input_csv):
+    # Define output file path
+    output_csv = "PPB2_Pred10Targets.csv"
+
+    # Load the input CSV file into a DataFrame
+    df = pd.read_csv(input_csv)
+
+    # Function to process the Targets-ID column
+    def process_targets_id(targets_id):
+        # Check if the targets_id is a string
+        if isinstance(targets_id, str):
+            # Remove the CHEMBL string from the input
+            targets_id = targets_id.replace('CHEMBL', '').strip()
+            # Split the remaining string by commas
+            chembl_ids = targets_id.split(',')
+            # Join the IDs with colons
+            formatted_ids = ':'.join(chembl_ids)
+            return formatted_ids
+        else:
+            # Return the original value if it's not a string
+            return targets_id
+
+    # Apply the processing function to the Targets-ID column
+    df['Targets-ID'] = df['Targets-ID'].apply(process_targets_id)
+
+    # Save the modified DataFrame to a new CSV file
+    df.to_csv(output_csv, index=False)
+
+    print(f"Processed results saved to '{output_csv}'")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    print(f"Prediction results saved to '{output_file}'")
