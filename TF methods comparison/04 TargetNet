@@ -8,6 +8,7 @@ import nest_asyncio
 import requests
 import xml.etree.ElementTree as ET
 import re
+import json
 import time
 from io import StringIO
 
@@ -50,7 +51,7 @@ async def targetNet(smile: str) -> str:
     url = "http://targetnet.scbdd.com/calcnet/calc_ensemble_text/"
     data = {
         "smile": smile,
-        "finger_type": "BaseInfo_daylight"  # Adjusted based on your intended usage
+        "finger_type": "BaseInfo_daylight" 
     }
 
     try:
@@ -67,7 +68,7 @@ async def targetNet(smile: str) -> str:
 
                         # Extract and sort by 'Prob'
                         if 'Prob' in df.columns:
-                            df = df.sort_values(by='Prob', ascending=False).head(5)
+                            df = df.sort_values(by='Prob', ascending=False).head(10) # First choose Top 10
 
                         # Convert to JSON and return
                         return df.T.to_json()
@@ -86,6 +87,22 @@ async def process_smiles(smiles_list):
     tasks = [targetNet(smile) for smile in smiles_list]
     results = await asyncio.gather(*tasks)
     return results
+
+# Function to extract Uniprot_IDs from the JSON-like string in the 'Target-id' column
+def extract_uniprot_ids(target_json):
+    try:
+        # Parse the JSON string
+        target_data = json.loads(target_json.replace('\\/', '/'))
+        
+        # Extract the 'Uniprot_ID' values
+        uniprot_ids = [details["Uniprot_ID"] for details in target_data.values()]
+        
+        # Join the Uniprot_IDs with a colon
+        return ':'.join(uniprot_ids)
+    
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        print(f"Error processing Target-id: {e}")
+        return ''  # Return empty string in case of errors
 
 def main():
     input_file = 'query_10nM.csv'
@@ -113,6 +130,11 @@ def main():
     df_temp = pd.read_csv(temp_output_file)
     df_temp['Target-id'] = df_temp['Target-id'].apply(extract_chembl_ids)
     df_temp.to_csv(final_output_file, index=False)
+
+    # Process the 'Target-id' column to extract UniProt IDs
+    df_final = pd.read_csv(final_output_file)
+    df_final['Target-id'] = df_final['Target-id'].apply(extract_uniprot_ids)
+    df_final.to_csv(final_output_file, index=False)
 
     end_time = time.time()
     total_time = end_time - start_time
