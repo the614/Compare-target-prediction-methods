@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from io import StringIO
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, UnexpectedAlertPresentException, NoSuchElementException
+import pandas as pd
+import csv
+import time
+
+# Set up Chrome options for headless mode
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--no-sandbox")
+
+# Initialize the WebDriver with options
+service = Service()
+driver = webdriver.Chrome(service=service, options=chrome_options)
+
+def SuperPredCrawler(smiles, CpdName=None):  
+    platform = 'SuperPred'
+    SPUrl = 'https://prediction.charite.de/subpages/target_prediction.php'
+    driver.get(SPUrl) 
+    SearchField = driver.find_element(By.XPATH, '//*[@id="smiles_string"]') 
+    SearchField.send_keys(smiles) 
+    search_button = driver.find_elements(By.XPATH, '/html/body/div[2]/div/div/form/div[2]/div/div/button')[0] 
+    search_button.click() 
+    startcalculation_button = driver.find_element(By.XPATH, '/html/body/div[2]/center/form/table/tbody/tr/td/button') 
+    startcalculation_button.click() 
+    dfsp = [] 
+    max_retries = 3  
+    retries = 0 
+    all_pages_processed = False
+    while retries < max_retries and not all_pages_processed:
+        try:
+            WebDriverWait(driver, 200).until(EC.presence_of_all_elements_located((By.TAG_NAME, 'table')))
+            table = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, '//*[@id="targets"]')))
+            table_html = table.get_attribute('outerHTML')
+            df = pd.read_html(StringIO(table_html), header=0)[0]  # Use StringIO to wrap the HTML content
+            cols = [col for col in df.columns if col in ['ChEMBL-ID', 'Probability']]
+            if 'ChEMBL-ID' not in cols:
+                return pd.DataFrame(columns=['ChEMBL-ID'])
+            df = df[cols]
+            if CpdName is None:
+                CpdName = 'Unknown'  # Default value if CpdName is not provided
+            df.insert(0, 'compound', CpdName)
+            df.insert(1, 'platform', platform)
+            df = df.rename(columns={"ChEMBL-ID": "chemblID", "Probability": "prob"}) 
+            dfsp.append(df)  
+            # Check if the "Next" button is available
+            try:
+                next_button = driver.find_element(By.XPATH, '//*[@id="targets_next"]')
+                if next_button.get_attribute("class") == "paginate_button next disabled":
+                    all_pages_processed = True  
+            except NoSuchElementException:
+                all_pages_processed = True 
+            # If the "Next" button is available, click the "Next" button to go to the next page
+            if not all_pages_processed:
+                next_button.click()
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, '//*[@id="targets"]/tbody')))
+            else:
+                break  
+        # Handling exceptional situations: page loading timeout, pop-up warning boxes, and other exceptions.
+        except TimeoutException:
+            retries += 1            
+            if retries >= max_retries:
+                all_pages_processed = True
+                CurrUrl = driver.current_url
+                dfsp = pd.DataFrame(columns=['compound', 'platform', 'chemblID', 'prob'])
+                dfsp = pd.concat([dfsp, pd.DataFrame({'compound': [CpdName],
+                                                'platform': [platform],
+                                                'chemblID': ['result page reached timeout'],
+                                                'prob': [CurrUrl]})], ignore_index=True)
+                return dfsp
+        except UnexpectedAlertPresentException:
+            retries += 1            
+            if retries >= max_retries:
+                all_pages_processed = True
+                alert = driver.switch_to.alert
+                dfsp = pd.DataFrame(columns=['compound', 'platform', 'chemblID', 'prob'])
+                dfsp = pd.concat([dfsp, pd.DataFrame({'compound': [CpdName],
+                                                'platform': [platform],
+                                                'chemblID': ['error message'],
+                                                'prob': [alert.text]})], ignore_index=True)
+                alert.accept()
+                return dfsp
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            all_pages_processed = True
+            break        
+    
+    if dfsp:
+        df = pd.concat(dfsp, ignore_index=True)
+    else:
+        df = pd.DataFrame(columns=['compound', 'platform', 'chemblID', 'prob'])
+    
+    # Retain target data in the SuperPred database with a "Probability" greater than or equal to 60%.
+    df['prob'] = df['prob'].str.rstrip('%').astype('float') / 100
+    df = df[df['prob'] >= 0.6]
+    
+    # Extract the ChEMBL-ID column and limit to the first 10 rows
+    if 'chemblID' in df.columns:
+        chembl_ids = df['chemblID'].head(10).tolist()    # If comparing based on Top5, choosing the first 5 among Top 10.
+        chembl_ids_str = ':'.join(map(str, chembl_ids))
+    else:
+        chembl_ids_str = ''
+    
+    return chembl_ids_str
+
+def process_csv(input_filename, output_filename):
+    # Read the input CSV
+    input_df = pd.read_csv(input_filename)
+    smiles_list = input_df['SMILES'].tolist()
+    ligand_ids = input_df['Ligand-id'].tolist()  
+
+    # Prepare to write to the output CSV
+    with open(output_filename, 'w', newline='', encoding='utf-8') as csv_out:
+        mywriter = csv.writer(csv_out)
+        mywriter.writerow(["Ligand-id", "SMILES", "Target-id"])  # Header
+
+        for ligand_id, smiles in zip(ligand_ids, smiles_list):
+            chembl_ids_result = SuperPredCrawler(smiles)
+            mywriter.writerow([ligand_id, smiles, chembl_ids_result])
+
+    print(f"Results saved to {output_filename}")
+
+def process_targets_id(input_csv, output_csv):
+    # Load the input CSV file into a DataFrame
+    df = pd.read_csv(input_csv)
+
+    # Function to process the Targets-ID column
+    def process_targets_id_column(targets_id):
+        # Check if the targets_id is a string
+        if isinstance(targets_id, str):
+            # Remove the CHEMBL string from the input
+            targets_id = targets_id.replace('CHEMBL', '').strip()
+            # Split the remaining string by commas
+            chembl_ids = targets_id.split(',')
+            # Join the IDs with colons
+            formatted_ids = ':'.join(chembl_ids)
+            return formatted_ids
+        else:
+            # Return the original value if it's not a string
+            return targets_id
+
+    df['Target-id'] = df['Target-id'].apply(process_targets_id_column)
+    df.rename(columns={'Target-id': 'Targets-id'}, inplace=True)
+    df.to_csv(output_csv, index=False)
+    print(f"Processed results saved to '{output_csv}'")
+
+start_time = time.time()  # Start the timer
+
+input_filename = 'query_10nM.csv'
+temp_output_filename = 'SuperPred-Top10_before_removing_CHEMBL.csv'
+final_output_filename = 'SuperPred-Top10.csv'
+
+process_csv(input_filename, temp_output_filename)
+process_targets_id(temp_output_filename, final_output_filename)
+driver.quit()
+
+end_time = time.time()
+elapsed_time = end_time - start_time 
+print(f"Total time taken: {elapsed_time:.2f} seconds") 
