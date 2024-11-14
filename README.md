@@ -40,4 +40,4 @@ The SuperPred predictions were accessed and modified using a crawler based on ht
 
 # Prediction Methods Validation
 
-The validation of prediction results includes performance metrics, such as MCC, Recall and so on.
+The validation of prediction results includes numbers of TP, FP, TN, or FN, and several performance metrics, such as MCC, Recall, Precision and so on.
