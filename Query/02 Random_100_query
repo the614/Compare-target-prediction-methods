@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import pandas as pd
+
+data_file_path = 'Query_FDA.csv'
+df = pd.read_csv(data_file_path)
+
+# Ramdon select 100 molecules
+ramdon_df = df.sample(n=100, random_state=42)
+
+output_file_path = 'query_10nM.csv'
+ramdon_df.to_csv(output_file_path, index=False)
+print("Random 100 molecules has been exported to", output_file_path)
