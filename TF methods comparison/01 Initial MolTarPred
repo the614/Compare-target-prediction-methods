@@ -1,4 +1,4 @@
-# Initial MolTarPred
+# Initial MolTarPred based on the original source http://ballester.marseille.inserm.fr/TF-benchmark.tar.gz
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
